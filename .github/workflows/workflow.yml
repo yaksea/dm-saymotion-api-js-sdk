@@ -1,0 +1,60 @@
+# Build and publish to npm when a tag starting with v is pushed (e.g. v1.0.0).
+# Publishing uses npm Trusted Publishing (OIDC); no long-lived NPM_TOKEN in this workflow.
+# The publish step runs npm CLI >=11.5.1 via npx (avoids fragile global npm self-upgrades on the runner).
+# On npmjs.com: package Settings -> Trusted publisher: bind GitHub org/user, repo,
+#   workflow filename (must match this file, e.g. workflow.yml), optional Environment matching the job (e.g. release).
+# For private packages during install only, use a read-only token and set NODE_AUTH_TOKEN on the Install step if needed.
+# Prerelease semver (e.g. 1.0.0-rc.1) requires an explicit dist-tag; the publish step uses --tag rc for those.
+
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          check-latest: true
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify package.json version matches git tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag $GITHUB_REF_NAME (expected $TAG)"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test -- --passWithNoTests
+
+      - name: Publish to npm
+        run: |
+          if node -e 'const v=require("./package.json").version; process.exit(/^\d+\.\d+\.\d+-.+/.test(v)?0:1)'; then
+            npx --yes npm@11.5.1 publish --tag rc
+          else
+            npx --yes npm@11.5.1 publish
+          fi
